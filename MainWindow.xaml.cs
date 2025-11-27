@@ -27,6 +27,8 @@ namespace LocalStreetViewApp
         private PerspectiveCamera camera;
         private ModelVisual3D sphereModelVisual;
         private GeometryModel3D sphereGeometry;
+        private bool isMapPanning = false;
+        private Point mapPanStartPoint;
 
         // 使用 StreetNode 替代 PanoramaLocation
         private List<StreetNode> streetNodes = new List<StreetNode>();
@@ -43,8 +45,18 @@ namespace LocalStreetViewApp
             InitializeMap();
             AttachMouseHandlers();
             this.KeyDown += MainWindow_KeyDown;
+            MapImage.SizeChanged += (s, e) => UpdateMapDisplay();
         }
+        private void MapImage_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            isMapPanning = true;
+            mapPanStartPoint = e.GetPosition(MapImage);
+            // 捕获鼠标，防止拖出图片区域后松开鼠标导致状态未重置
+            MapImage.CaptureMouse();
 
+            // 改变鼠标样式提示用户
+            MapImage.Cursor = Cursors.SizeAll;
+        }
         private void InitializeMap()
         {
             try
@@ -63,14 +75,28 @@ namespace LocalStreetViewApp
         {
             try
             {
-                using (var mapBitmap = mapManager.RenderMap(streetNodes))
+                if (mapManager == null) return;
+
+                // 获取 MapImage 控件的实际像素大小，如果还未渲染则给个默认值
+                int w = (int)MapImage.ActualWidth;
+                int h = (int)MapImage.ActualHeight;
+                if (w <= 0 || h <= 0) { w = 800; h = 300; }
+
+                // 1. 传入控件大小进行渲染
+                using (var mapBitmap = mapManager.RenderMap(streetNodes, w, h))
                 {
                     MapImage.Source = BitmapToImageSource(mapBitmap);
                 }
+
+                var currentBounds = mapManager.GetCurrentViewBounds();
+                coordinateTransformer = new CoordinateTransformer(currentBounds, new System.Windows.Size(w, h));
+
+                // 3. 如果有选中的点，刷新红点位置
+                UpdatePositionMarker();
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"地图渲染失败: {ex.Message}");
+
             }
         }
 
@@ -98,8 +124,8 @@ namespace LocalStreetViewApp
                 dlg.Filter = "Shapefile (*.shp)|*.shp";
                 dlg.Title = "选择路网(线) Shapefile";
                 // 这里可以设置你的默认路径
-                dlg.InitialDirectory = @"C:\Users\MECHREVO\Desktop\A";
-
+                dlg.InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+                //dlg.InitialDirectory = @"C:\Users\MECHREVO\Desktop\A";
                 if (dlg.ShowDialog() == true)
                 {
                     // 1. 调用 MapManager 加载线数据
@@ -176,7 +202,6 @@ namespace LocalStreetViewApp
                     {
                         message += "，但没有成功绑定任何图片";
                     }
-
                     MessageBox.Show(message);
                 }
             }
@@ -345,16 +370,48 @@ namespace LocalStreetViewApp
 
         private void MapImage_MouseMove(object sender, MouseEventArgs e)
         {
-            if (coordinateTransformer == null) return;
+            // 1. 处理拖拽逻辑
+            if (isMapPanning && mapManager != null)
+            {
+                var currentPoint = e.GetPosition(MapImage);
 
-            var mousePoint = e.GetPosition(MapImage);
-            var (x, y) = coordinateTransformer.ScreenToGeo(mousePoint);
+                // 计算位移
+                double dx = currentPoint.X - mapPanStartPoint.X;
+                double dy = currentPoint.Y - mapPanStartPoint.Y;
 
-            // 显示坐标信息
-            MapCoordText.Text = $"坐标: ({x:F6}, {y:F6})";
+                // 如果位移太小（防抖），不处理
+                if (Math.Abs(dx) > 1 || Math.Abs(dy) > 1)
+                {
+                    // 调用 MapManager 进行平移
+                    mapManager.Pan(dx, dy, MapImage.ActualWidth, MapImage.ActualHeight);
+
+                    // 重新渲染地图
+                    UpdateMapDisplay();
+
+                    // 更新起始点，以便下一次计算增量
+                    mapPanStartPoint = currentPoint;
+                }
+            }
+
+            // 2. 原有的显示坐标逻辑
+            if (coordinateTransformer != null)
+            {
+                var mousePoint = e.GetPosition(MapImage);
+                var (x, y) = coordinateTransformer.ScreenToGeo(mousePoint);
+                MapCoordText.Text = $"坐标: ({x:F6}, {y:F6})";
+            }
         }
 
         // 更新位置标记
+        private void MapImage_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (isMapPanning)
+            {
+                isMapPanning = false;
+                MapImage.ReleaseMouseCapture();
+                MapImage.Cursor = Cursors.Arrow; // 恢复鼠标样式
+            }
+        }
         private void UpdatePositionMarker()
         {
             if (currentIndex < streetNodes.Count && coordinateTransformer != null)

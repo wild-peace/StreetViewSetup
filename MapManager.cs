@@ -34,7 +34,9 @@ namespace LocalStreetViewApp
         public List<StreetNode> Nodes = new List<StreetNode>();
         public List<StreetLine> Lines = new List<StreetLine>();
         private double zoomLevel = 1.0;
-
+        private double viewCenterX = 0;
+        private double viewCenterY = 0;
+        private bool isViewInitialized = false;
         // -------------------------------
         //   ① 加载 Shapefile 点文件
         // -------------------------------
@@ -247,6 +249,24 @@ namespace LocalStreetViewApp
                 Console.WriteLine(ex.StackTrace);
             }
         }
+        
+        public void Pan(double screenDx, double screenDy, double canvasWidth, double canvasHeight)
+        {
+            if (!isViewInitialized) ResetView();
+
+            var currentBounds = GetCurrentViewBounds();
+
+            // 计算 屏幕像素 到 地理坐标 的比例
+            // 例如：屏幕移动100像素，相当于地理坐标移动了多少度
+            double ratioX = currentBounds.Width / canvasWidth;
+            double ratioY = currentBounds.Height / canvasHeight;
+
+           
+            viewCenterX -= screenDx * ratioX;
+
+           
+            viewCenterY += screenDy * ratioY;
+        }
 
         // -------------------------------
         //   ② 自动绑定 lon_lat.jpg 格式的图片
@@ -440,8 +460,8 @@ namespace LocalStreetViewApp
                 allScreenLines.Add(points.ToArray());
             }
 
-            using (var outerPen = new Pen(Color.Gray, 10))
-            using (var innerPen = new Pen(Color.White, 8))
+            using (var outerPen = new Pen(Color.Gray, 6))
+            using (var innerPen = new Pen(Color.White, 4))
             {
                 // 设置圆头和圆角连接
                 // System.Drawing.Drawing2D 需要引用，或者写全名
@@ -552,7 +572,111 @@ namespace LocalStreetViewApp
             if (range / baseSize > 2) return baseSize;
             return baseSize / 2;
         }
+        public MapBounds GetCurrentViewBounds()
+        {
+            var fullBounds = GetDataBounds();
+            if (!isViewInitialized) ResetView();
 
+            // 根据缩放级别计算当前的视野宽高
+            double currentGeoWidth = fullBounds.Width / zoomLevel;
+            double currentGeoHeight = fullBounds.Height / zoomLevel;
+
+            // 基于当前中心点计算边界
+            return new MapBounds(
+                viewCenterX - currentGeoWidth / 2,
+                viewCenterY - currentGeoHeight / 2,
+                viewCenterX + currentGeoWidth / 2,
+                viewCenterY + currentGeoHeight / 2
+            );
+        }
+        public MapBounds GetDataBounds()
+        {
+            double minX = double.MaxValue, maxX = double.MinValue;
+            double minY = double.MaxValue, maxY = double.MinValue;
+            bool hasData = false;
+
+            // 1. 统计点数据范围
+            if (Nodes != null && Nodes.Count > 0)
+            {
+                foreach (var node in Nodes)
+                {
+                    if (node.Lon < minX) minX = node.Lon;
+                    if (node.Lon > maxX) maxX = node.Lon;
+                    if (node.Lat < minY) minY = node.Lat;
+                    if (node.Lat > maxY) maxY = node.Lat;
+                }
+                hasData = true;
+            }
+
+            // 2. ★★★ 必须添加：统计线数据范围 ★★★
+            if (Lines != null && Lines.Count > 0)
+            {
+                foreach (var line in Lines)
+                {
+                    if (line.Coordinates == null) continue;
+                    foreach (var coord in line.Coordinates)
+                    {
+                        if (coord.X < minX) minX = coord.X;
+                        if (coord.X > maxX) maxX = coord.X;
+                        if (coord.Y < minY) minY = coord.Y;
+                        if (coord.Y > maxY) maxY = coord.Y;
+                    }
+                }
+                hasData = true;
+            }
+
+            // 如果完全没有数据
+            if (!hasData) return new MapBounds(0, 0, 100, 100);
+
+            // 计算一点边距，让数据不要顶格显示
+            double width = maxX - minX;
+            double height = maxY - minY;
+
+            // 防止由单点导致宽高为0
+            if (width == 0) width = 0.01;
+            if (height == 0) height = 0.01;
+
+            double marginX = width * 0.1;
+            double marginY = height * 0.1;
+
+            return new MapBounds(minX - marginX, minY - marginY, maxX + marginX, maxY + marginY);
+        }
+
+        // 2. 修改 RenderMap 方法，接收外部传入的宽高，并使用当前视图范围
+        // 修改前: public Bitmap RenderMap(List<StreetNode> nodes)
+        public Bitmap RenderMap(List<StreetNode> nodes, int canvasWidth, int canvasHeight)
+        {
+            try
+            {
+                // ★★★ 关键修改：获取缩放后的范围，而不是全图范围 ★★★
+                var bounds = GetCurrentViewBounds();
+
+                // 防止除以0
+                if (canvasWidth <= 0) canvasWidth = 1;
+                if (canvasHeight <= 0) canvasHeight = 1;
+
+                var bitmap = new Bitmap(canvasWidth, canvasHeight);
+                using (var graphics = Graphics.FromImage(bitmap))
+                {
+                    graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    graphics.Clear(Color.LightGray); // 背景色
+
+                    // 传入当前的 bounds 和 画布尺寸
+                    DrawGrid(graphics, bounds, canvasWidth, canvasHeight);
+
+                    graphics.Clear(Color.FromArgb(255, 248, 220)); // 街道背景
+                    DrawLines(graphics, Lines, bounds, canvasWidth, canvasHeight);
+
+                    DrawNodes(graphics, nodes, bounds, canvasWidth, canvasHeight);
+                }
+                return bitmap;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"渲染失败: {ex.Message}");
+                return new Bitmap(Math.Max(1, canvasWidth), Math.Max(1, canvasHeight));
+            }
+        }
         public MapBounds GetMapBounds()
         {
             double minX = double.MaxValue, maxX = double.MinValue;
@@ -658,7 +782,11 @@ namespace LocalStreetViewApp
 
         public void ResetView()
         {
+            var fullBounds = GetDataBounds(); // 获取所有数据的最大范围
+            viewCenterX = (fullBounds.MinX + fullBounds.MaxX) / 2;
+            viewCenterY = (fullBounds.MinY + fullBounds.MaxY) / 2;
             zoomLevel = 1.0;
+            isViewInitialized = true;
         }
 
     }
