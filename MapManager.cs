@@ -37,9 +37,7 @@ namespace LocalStreetViewApp
         private double viewCenterX = 0;
         private double viewCenterY = 0;
         private bool isViewInitialized = false;
-        // -------------------------------
-        //   ① 加载 Shapefile 点文件
-        // -------------------------------
+       
         public void LoadShapefile(string shpPath)
         {
             try
@@ -171,9 +169,7 @@ namespace LocalStreetViewApp
             }
         }
 
-        // -------------------------------
-        //   ② 加载 Shapefile 线文件 (路网) - 终极兼容版
-        // -------------------------------
+      
         public void LoadLineShapefile(string shpPath)
         {
             try
@@ -269,7 +265,7 @@ namespace LocalStreetViewApp
         }
 
         // -------------------------------
-        //   ② 自动绑定 lon_lat.jpg 格式的图片
+        //   自动绑定 lon_lat.jpg 格式的图片
         // -------------------------------
         public int AutoBindImages(string folder)
         {
@@ -283,49 +279,81 @@ namespace LocalStreetViewApp
                     return 0;
                 }
 
+                // 1. 获取所有图片
                 var files = Directory.GetFiles(folder, "*.jpg", SearchOption.AllDirectories);
-                Console.WriteLine($"找到 {files.Length} 个JPG文件");
+                Console.WriteLine($"扫描到 {files.Length} 个JPG文件，正在解析坐标...");
 
-                int count = 0;
+                // 2. 预解析所有图片的文件名，转换为坐标
+                // 结构：(经度, 纬度, 文件路径)
+                var imageMetaList = new List<(double Lon, double Lat, string Path)>();
 
-                // 创建图片文件名到文件路径的映射
-                var imageMap = new Dictionary<string, string>();
                 foreach (var file in files)
                 {
-                    string fileName = Path.GetFileNameWithoutExtension(file);
-                    imageMap[fileName] = file;
-                }
-
-                // 为每个节点查找对应的图片
-                foreach (var node in Nodes)
-                {
-                    // 生成预期的图片文件名（支持不同精度）
-                    string[] possibleFileNames = GeneratePossibleFileNames(node.Lon, node.Lat);
-
-                    foreach (var fileName in possibleFileNames)
+                    try
                     {
-                        if (imageMap.ContainsKey(fileName))
+                        string fileName = Path.GetFileNameWithoutExtension(file);
+
+                        // 假设文件名格式为: 114.38663_30.51497866
+                        // 使用 '_' 分割
+                        var parts = fileName.Split('_');
+
+                        if (parts.Length >= 2)
                         {
-                            node.ImagePath = imageMap[fileName];
-                            node.DistanceToImage = 0; // 精确匹配，距离为0
-                            count++;
-                            Console.WriteLine($"  节点 {node.Id}: 成功绑定图片 {fileName}.jpg");
-                            break;
+                            // 尝试解析经纬度
+                            if (double.TryParse(parts[0], out double imgLon) &&
+                                double.TryParse(parts[1], out double imgLat))
+                            {
+                                imageMetaList.Add((imgLon, imgLat, file));
+                            }
                         }
                     }
-
-                    if (string.IsNullOrEmpty(node.ImagePath))
+                    catch
                     {
-                        Console.WriteLine($"  节点 {node.Id}: 未找到匹配的图片");
+                        // 忽略解析失败的文件名
                     }
                 }
 
-                Console.WriteLine($"成功绑定 {count} 张图片");
+                Console.WriteLine($"成功解析出 {imageMetaList.Count} 张带有坐标信息的图片");
+
+                // 3. 开始匹配
+                int count = 0;
+                // 设定容差：0.00001 度大约等于 1米左右的误差范围
+                // 你的例子中相差 0.00000006，完全在这个范围内
+                double tolerance = 0.00002;
+
+                foreach (var node in Nodes)
+                {
+                    // 在所有图片中查找距离该节点最近，且距离小于容差的图片
+                    // 这里使用简单的曼哈顿距离 (|dx| + |dy|) 计算，效率更高，对于微小距离足够准确
+
+                    var bestMatch = imageMetaList
+                        .Select(img => new
+                        {
+                            Info = img,
+                            // 计算坐标差值绝对值之和
+                            Diff = Math.Abs(img.Lon - node.Lon) + Math.Abs(img.Lat - node.Lat)
+                        })
+                        .Where(x => x.Diff < tolerance) // 筛选出在容差范围内的
+                        .OrderBy(x => x.Diff)           // 按差异从小到大排序
+                        .FirstOrDefault();              // 取最匹配的那个
+
+                    if (bestMatch != null)
+                    {
+                        node.ImagePath = bestMatch.Info.Path;
+                        node.DistanceToImage = bestMatch.Diff; // 这里的距离是坐标差值，仅供参考
+                        count++;
+
+                        // 调试输出（可选，数据多时建议注释掉）
+                        // Console.WriteLine($"  节点{node.Id} 匹配到 {Path.GetFileName(node.ImagePath)} (误差: {bestMatch.Diff:F8})");
+                    }
+                }
+
+                Console.WriteLine($"匹配完成，共成功绑定 {count} 张图片");
                 return count;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"绑定图片失败: {ex.Message}");
+                Console.WriteLine($"绑定图片流程出错: {ex.Message}");
                 return 0;
             }
         }

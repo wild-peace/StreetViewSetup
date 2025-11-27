@@ -166,7 +166,7 @@ namespace LocalStreetViewApp
                     streetNodes = mapManager.Nodes;
 
                     // 自动绑定图片
-                    string imageFolder = @"C:\Users\MECHREVO\Desktop\images";
+                    string imageFolder = @"C:\Users\24462\Desktop\images";
 
                     // 如果指定路径不存在，尝试相对路径
                     if (!Directory.Exists(imageFolder))
