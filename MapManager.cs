@@ -1,0 +1,665 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using NetTopologySuite;
+using NetTopologySuite.Geometries;
+using NetTopologySuite.IO;
+using Coordinate = NetTopologySuite.Geometries.Coordinate;
+// 使用别名解决 Point 类型冲突
+using NTSPoint = NetTopologySuite.Geometries.Point;
+using DrawingPoint = System.Drawing.Point;
+using GeoAPI.Geometries;
+
+namespace LocalStreetViewApp
+{
+    // 街景节点结构
+    public class StreetNode
+    {
+        public int Id;
+        public double Lon;
+        public double Lat;
+        public string ImagePath;        // 绑定的街景图片路径
+        public double DistanceToImage;  // 图片到节点距离
+    }
+    public class StreetLine
+    {
+        public int Id;
+        public NetTopologySuite.Geometries.Coordinate[] Coordinates;  // 存储线的坐标点数组
+    }
+    public class MapManager
+    {
+        public List<StreetNode> Nodes = new List<StreetNode>();
+        public List<StreetLine> Lines = new List<StreetLine>();
+        private double zoomLevel = 1.0;
+
+        // -------------------------------
+        //   ① 加载 Shapefile 点文件
+        // -------------------------------
+        public void LoadShapefile(string shpPath)
+        {
+            try
+            {
+                Nodes.Clear();
+                Console.WriteLine($"开始加载SHP文件: {shpPath}");
+
+                if (!File.Exists(shpPath))
+                {
+                    Console.WriteLine($"SHP文件不存在: {shpPath}");
+                    return;
+                }
+
+                // 检查相关文件是否存在
+                string directory = Path.GetDirectoryName(shpPath);
+                string baseName = Path.GetFileNameWithoutExtension(shpPath);
+                string shxPath = Path.Combine(directory, baseName + ".shx");
+                string dbfPath = Path.Combine(directory, baseName + ".dbf");
+
+                Console.WriteLine($"相关文件检查:");
+                Console.WriteLine($"   SHX文件: {shxPath} - 存在: {File.Exists(shxPath)}");
+                Console.WriteLine($"   DBF文件: {dbfPath} - 存在: {File.Exists(dbfPath)}");
+
+                if (!File.Exists(shxPath) || !File.Exists(dbfPath))
+                {
+                    Console.WriteLine($"SHP文件不完整，缺少必要的辅助文件");
+                    return;
+                }
+
+                var reader = new ShapefileDataReader(shpPath, GeometryFactory.Default);
+                int id = 0;
+                int recordCount = 0;
+
+                // 获取字段名称信息
+                var header = reader.DbaseHeader;
+                Console.WriteLine($"属性字段信息:");
+                for (int i = 0; i < header.Fields.Length; i++)
+                {
+                    var field = header.Fields[i];
+                    Console.WriteLine($"  字段 {i}: {field.Name} ({field.Type})");
+                }
+
+                Console.WriteLine($"开始读取要素...");
+
+                while (reader.Read())
+                {
+                    recordCount++;
+                    var geom = reader.Geometry as NTSPoint;
+                    if (geom == null)
+                    {
+                        Console.WriteLine($"  记录 {recordCount}: 不是点要素，跳过");
+                        continue;
+                    }
+
+                    // 尝试从属性字段读取经纬度
+                    double lon = geom.X; // 默认使用几何坐标
+                    double lat = geom.Y;
+
+                    // 尝试从属性字段读取经纬度
+                    bool hasLonField = false;
+                    bool hasLatField = false;
+
+                    // 常见的经纬度字段名
+                    string[] possibleLonFields = { "lon", "longitude", "x", "经度", "long" };
+                    string[] possibleLatFields = { "lat", "latitude", "y", "纬度", "lati" };
+
+                    foreach (var fieldName in possibleLonFields)
+                    {
+                        try
+                        {
+                            var value = reader[fieldName];
+                            if (value != null && double.TryParse(value.ToString(), out double parsedLon))
+                            {
+                                lon = parsedLon;
+                                hasLonField = true;
+                                Console.WriteLine($"    从字段 '{fieldName}' 读取经度: {lon}");
+                                break;
+                            }
+                        }
+                        catch
+                        {
+                            // 字段不存在，继续尝试下一个
+                        }
+                    }
+
+                    foreach (var fieldName in possibleLatFields)
+                    {
+                        try
+                        {
+                            var value = reader[fieldName];
+                            if (value != null && double.TryParse(value.ToString(), out double parsedLat))
+                            {
+                                lat = parsedLat;
+                                hasLatField = true;
+                                Console.WriteLine($"    从字段 '{fieldName}' 读取纬度: {lat}");
+                                break;
+                            }
+                        }
+                        catch
+                        {
+                            // 字段不存在，继续尝试下一个
+                        }
+                    }
+
+                    if (!hasLonField || !hasLatField)
+                    {
+                        Console.WriteLine($"  警告: 记录 {recordCount} 未找到经纬度字段，使用几何坐标");
+                    }
+
+                    Nodes.Add(new StreetNode
+                    {
+                        Id = id++,
+                        Lon = lon,
+                        Lat = lat,
+                        ImagePath = null,
+                        DistanceToImage = double.MaxValue
+                    });
+
+                    Console.WriteLine($"  记录 {recordCount}: 点({lon:F6}, {lat:F6})");
+                }
+
+                Console.WriteLine($"成功加载 {Nodes.Count} 个点要素");
+                reader.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"加载SHP文件失败: {ex.Message}");
+                Console.WriteLine($"堆栈跟踪: {ex.StackTrace}");
+            }
+        }
+
+        // -------------------------------
+        //   ② 加载 Shapefile 线文件 (路网) - 终极兼容版
+        // -------------------------------
+        public void LoadLineShapefile(string shpPath)
+        {
+            try
+            {
+                // Lines.Clear(); // 如果需要清空旧数据请取消注释
+                Console.WriteLine($"[1] 准备加载 SHP 文件: {shpPath}");
+
+                if (!File.Exists(shpPath))
+                {
+                    Console.WriteLine("[错误] 文件不存在！");
+                    return;
+                }
+
+                var reader = new ShapefileDataReader(shpPath, GeometryFactory.Default);
+                int id = 0;
+                int rawRecordCount = 0;
+                int successCount = 0;
+
+                while (reader.Read())
+                {
+                    rawRecordCount++;
+                    var geometry = reader.Geometry; // 获取几何体
+
+                    if (geometry == null) continue;
+
+                    // --- 通用处理逻辑 ---
+                    bool hasAdded = false;
+
+                    // 遍历该几何体的所有组成部分
+                    // GetGeometryN 和 NumGeometries 是所有几何体通用的方法
+                    for (int i = 0; i < geometry.NumGeometries; i++)
+                    {
+                        var part = geometry.GetGeometryN(i);
+
+                        // 检查坐标是否存在
+                        if (part.Coordinates != null && part.Coordinates.Length > 1)
+                        {
+                            // ★★★ 核心修复：手动提取 X,Y ★★★
+                            // 不管 part.Coordinates 是 GeoAPI 还是 NTS，
+                            // 只要它能被 foreach 遍历且有 X,Y 属性，这段代码就能跑。
+                            var pointList = new List<Coordinate>();
+
+                            foreach (var rawPoint in part.Coordinates)
+                            {
+                                // 使用文件顶部定义的 using Coordinate = ... 来创建新点
+                                pointList.Add(new Coordinate(rawPoint.X, rawPoint.Y));
+                            }
+
+                            Lines.Add(new StreetLine
+                            {
+                                Id = id++,
+                                Coordinates = pointList.ToArray()
+                            });
+
+                            hasAdded = true;
+                            successCount++;
+                        }
+                    }
+
+                    // 调试日志
+                    if (!hasAdded && rawRecordCount <= 5)
+                    {
+                        Console.WriteLine($"[警告] 记录 {rawRecordCount} 读取到了几何体，但未能提取出有效坐标。类型: {geometry.GetType().Name}");
+                    }
+                }
+
+                reader.Dispose();
+                Console.WriteLine($"[结束] 扫描到 {rawRecordCount} 条记录，成功加载 {successCount} 条线段");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[异常] 加载线SHP崩溃: {ex.Message}");
+                Console.WriteLine(ex.StackTrace);
+            }
+        }
+
+        // -------------------------------
+        //   ② 自动绑定 lon_lat.jpg 格式的图片
+        // -------------------------------
+        public int AutoBindImages(string folder)
+        {
+            try
+            {
+                Console.WriteLine($"开始绑定图片，文件夹: {folder}");
+
+                if (!Directory.Exists(folder))
+                {
+                    Console.WriteLine($"图片文件夹不存在: {folder}");
+                    return 0;
+                }
+
+                var files = Directory.GetFiles(folder, "*.jpg", SearchOption.AllDirectories);
+                Console.WriteLine($"找到 {files.Length} 个JPG文件");
+
+                int count = 0;
+
+                // 创建图片文件名到文件路径的映射
+                var imageMap = new Dictionary<string, string>();
+                foreach (var file in files)
+                {
+                    string fileName = Path.GetFileNameWithoutExtension(file);
+                    imageMap[fileName] = file;
+                }
+
+                // 为每个节点查找对应的图片
+                foreach (var node in Nodes)
+                {
+                    // 生成预期的图片文件名（支持不同精度）
+                    string[] possibleFileNames = GeneratePossibleFileNames(node.Lon, node.Lat);
+
+                    foreach (var fileName in possibleFileNames)
+                    {
+                        if (imageMap.ContainsKey(fileName))
+                        {
+                            node.ImagePath = imageMap[fileName];
+                            node.DistanceToImage = 0; // 精确匹配，距离为0
+                            count++;
+                            Console.WriteLine($"  节点 {node.Id}: 成功绑定图片 {fileName}.jpg");
+                            break;
+                        }
+                    }
+
+                    if (string.IsNullOrEmpty(node.ImagePath))
+                    {
+                        Console.WriteLine($"  节点 {node.Id}: 未找到匹配的图片");
+                    }
+                }
+
+                Console.WriteLine($"成功绑定 {count} 张图片");
+                return count;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"绑定图片失败: {ex.Message}");
+                return 0;
+            }
+        }
+
+        // 生成可能的文件名（支持不同精度）
+        private string[] GeneratePossibleFileNames(double lon, double lat)
+        {
+            var fileNames = new List<string>();
+
+            // 不同精度级别
+            int[] precisions = { 6, 5, 4, 3, 2 };
+
+            foreach (int precision in precisions)
+            {
+                string lonStr = lon.ToString($"F{precision}", CultureInfo.InvariantCulture);
+                string latStr = lat.ToString($"F{precision}", CultureInfo.InvariantCulture);
+
+                // 基本格式: lon_lat
+                fileNames.Add($"{lonStr}_{latStr}");
+
+                // 其他可能的格式
+                fileNames.Add($"{lonStr.Replace(".", "_")}_{latStr.Replace(".", "_")}");
+                fileNames.Add($"{lonStr.Replace(".", "")}_{latStr.Replace(".", "")}");
+            }
+
+            return fileNames.Distinct().ToArray();
+        }
+
+        // -------------------------------
+        //   查找最近节点
+        // -------------------------------
+        public StreetNode FindNearestNode(double lon, double lat)
+        {
+            if (Nodes == null || Nodes.Count == 0)
+            {
+                Console.WriteLine("     节点列表为空");
+                return null;
+            }
+
+            StreetNode best = null;
+            double bestDist = double.MaxValue;
+
+            foreach (var n in Nodes)
+            {
+                double d = Haversine(lat, lon, n.Lat, n.Lon);
+                if (d < bestDist)
+                {
+                    best = n;
+                    bestDist = d;
+                }
+            }
+
+            if (best != null)
+            {
+                Console.WriteLine($"      找到最近节点: ID={best.Id}, 距离={bestDist:F2}米");
+            }
+
+            return best;
+        }
+
+        // -------------------------------
+        //   经纬度距离（Haversine）
+        // -------------------------------
+        private static double Haversine(double lat1, double lon1, double lat2, double lon2)
+        {
+            double R = 6371000; // meters
+
+            double dLat = (lat2 - lat1) * Math.PI / 180;
+            double dLon = (lon2 - lon1) * Math.PI / 180;
+
+            lat1 *= Math.PI / 180;
+            lat2 *= Math.PI / 180;
+
+            double a =
+                Math.Sin(dLat / 2) * Math.Sin(dLat / 2) +
+                Math.Cos(lat1) * Math.Cos(lat2) *
+                Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
+
+            return R * 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
+        }
+
+        // -------------------------------
+        //   地图渲染
+        // -------------------------------
+        public Bitmap RenderMap(List<StreetNode> nodes)
+        {
+            try
+            {
+                var bounds = GetMapBounds();
+                int width = 800;
+                int height = 300;
+
+                var bitmap = new Bitmap(width, height);
+                using (var graphics = Graphics.FromImage(bitmap))
+                {
+                    // 开启抗锯齿，线条更平滑
+                    graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    graphics.Clear(Color.LightGray);
+
+                    DrawGrid(graphics, bounds, width, height);
+
+                    graphics.Clear(Color.FromArgb(255, 248, 220));
+                    DrawLines(graphics, Lines, bounds, width, height);
+                    
+                    DrawNodes(graphics, nodes, bounds, width, height);
+                }
+                return bitmap;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"渲染失败: {ex.Message}");
+                return new Bitmap(800, 300);
+            }
+        }
+        private void DrawLines(Graphics graphics, List<StreetLine> lines, MapBounds bounds, int width, int height)
+        {
+            if (lines == null || lines.Count == 0) return;
+
+            var allScreenLines = new List<DrawingPoint[]>();
+
+            foreach (var line in lines)
+            {
+                if (line.Coordinates == null || line.Coordinates.Length < 2) continue;
+
+                var points = new List<DrawingPoint>();
+                foreach (var coord in line.Coordinates)
+                {
+                    int screenX = (int)((coord.X - bounds.MinX) / bounds.Width * width);
+                    int screenY = height - (int)((coord.Y - bounds.MinY) / bounds.Height * height);
+                    points.Add(new DrawingPoint(screenX, screenY));
+                }
+                allScreenLines.Add(points.ToArray());
+            }
+
+            using (var outerPen = new Pen(Color.Gray, 10))
+            using (var innerPen = new Pen(Color.White, 8))
+            {
+                // 设置圆头和圆角连接
+                // System.Drawing.Drawing2D 需要引用，或者写全名
+                var roundCap = System.Drawing.Drawing2D.LineCap.Round;
+                var roundJoin = System.Drawing.Drawing2D.LineJoin.Round;
+
+                outerPen.StartCap = roundCap;
+                outerPen.EndCap = roundCap;
+                outerPen.LineJoin = roundJoin;
+
+                innerPen.StartCap = roundCap;
+                innerPen.EndCap = roundCap;
+                innerPen.LineJoin = roundJoin;
+
+                foreach (var points in allScreenLines)
+                {
+                    try { graphics.DrawLines(outerPen, points); } catch { }
+                }
+                foreach (var points in allScreenLines)
+                {
+                    try { graphics.DrawLines(innerPen, points); } catch { }
+                }
+            }
+        }
+        private void DrawGrid(Graphics graphics, MapBounds bounds, int width, int height)
+        {
+            using (var pen = new Pen(Color.DarkGray, 1))
+            {
+                // 绘制网格线
+                double gridSize = CalculateGridSize(bounds);
+
+                double startX = Math.Floor(bounds.MinX / gridSize) * gridSize;
+                double startY = Math.Floor(bounds.MinY / gridSize) * gridSize;
+
+                for (double x = startX; x <= bounds.MaxX; x += gridSize)
+                {
+                    int screenX = (int)((x - bounds.MinX) / bounds.Width * width);
+                    graphics.DrawLine(pen, screenX, 0, screenX, height);
+                }
+
+                for (double y = startY; y <= bounds.MaxY; y += gridSize)
+                {
+                    int screenY = height - (int)((y - bounds.MinY) / bounds.Height * height);
+                    graphics.DrawLine(pen, 0, screenY, width, screenY);
+                }
+            }
+        }
+
+        private void DrawNodes(Graphics graphics, List<StreetNode> nodes, MapBounds bounds, int width, int height)
+        {
+            if (nodes == null || nodes.Count == 0)
+            {
+                // 绘制提示信息
+                //graphics.DrawString("没有数据点", new Font("Arial", 16), Brushes.Red, width / 2 - 50, height / 2 - 10);
+                return;
+            }
+
+            using (var noImageBrush = new SolidBrush(Color.Gray))
+            using (var hasImageBrush = new SolidBrush(Color.Red))
+            using (var outlinePen = new Pen(Color.Black, 1))
+            {
+                int nodesWithImages = 0;
+
+                foreach (var node in nodes)
+                {
+                    int screenX = (int)((node.Lon - bounds.MinX) / bounds.Width * width);
+                    int screenY = height - (int)((node.Lat - bounds.MinY) / bounds.Height * height);
+
+                    // 根据是否有图片选择颜色
+                    var brush = string.IsNullOrEmpty(node.ImagePath) ? noImageBrush : hasImageBrush;
+
+                    // 绘制点位
+                    graphics.FillEllipse(brush, screenX - 4, screenY - 4, 4, 4);
+                    graphics.DrawEllipse(outlinePen, screenX - 4, screenY - 4, 4, 4);
+
+                    // 绘制编号（只绘制有图片的节点）
+                    if (!string.IsNullOrEmpty(node.ImagePath))
+                    {
+                        graphics.DrawString(
+                            (node.Id + 1).ToString(),
+                            new Font("Arial", 8),
+                            Brushes.White,
+                            screenX + 6,
+                            screenY - 6
+                        );
+                        nodesWithImages++;
+                    }
+                }
+
+                // 绘制统计信息
+                graphics.DrawString(
+                    $"总节点: {nodes.Count}, 有图片: {nodesWithImages}",
+                    new Font("Arial", 10),
+                    Brushes.Black,
+                    10, 10
+                );
+            }
+        }
+
+        private double CalculateGridSize(MapBounds bounds)
+        {
+            double range = Math.Max(bounds.Width, bounds.Height);
+            if (range == 0) return 10;
+
+            double baseSize = Math.Pow(10, Math.Floor(Math.Log10(range)));
+
+            if (range / baseSize > 5) return baseSize * 2;
+            if (range / baseSize > 2) return baseSize;
+            return baseSize / 2;
+        }
+
+        public MapBounds GetMapBounds()
+        {
+            double minX = double.MaxValue, maxX = double.MinValue;
+            double minY = double.MaxValue, maxY = double.MinValue;
+            bool hasData = false;
+
+            // 1. 统计点数据范围
+            if (Nodes != null && Nodes.Count > 0)
+            {
+                minX = Math.Min(minX, Nodes.Min(n => n.Lon));
+                maxX = Math.Max(maxX, Nodes.Max(n => n.Lon));
+                minY = Math.Min(minY, Nodes.Min(n => n.Lat));
+                maxY = Math.Max(maxY, Nodes.Max(n => n.Lat));
+                hasData = true;
+            }
+
+            // 2. 统计线数据范围
+            if (Lines != null && Lines.Count > 0)
+            {
+                foreach (var line in Lines)
+                {
+                    foreach (var coord in line.Coordinates)
+                    {
+                        minX = Math.Min(minX, coord.X);
+                        maxX = Math.Max(maxX, coord.X);
+                        minY = Math.Min(minY, coord.Y);
+                        maxY = Math.Max(maxY, coord.Y);
+                    }
+                }
+                hasData = true;
+            }
+
+            if (!hasData) return new MapBounds(0, 0, 100, 100);
+
+            // 计算边距
+            double marginX = (maxX - minX) * 0.1;
+            double marginY = (maxY - minY) * 0.1;
+            double margin = Math.Max(Math.Max(marginX, marginY), 0.001);
+
+            return new MapBounds(minX - margin, minY - margin, maxX + margin, maxY + margin);
+        }
+        public class MapBounds
+        {
+            public double MinX { get; }
+            public double MinY { get; }
+            public double MaxX { get; }
+            public double MaxY { get; }
+            public double Width => MaxX - MinX;
+            public double Height => MaxY - MinY;
+
+            public MapBounds(double minX, double minY, double maxX, double maxY)
+            {
+                MinX = minX;
+                MinY = minY;
+                MaxX = maxX;
+                MaxY = maxY;
+            }
+        }
+
+        public class CoordinateTransformer
+        {
+            private MapBounds bounds;
+            private System.Windows.Size canvasSize;
+
+            public CoordinateTransformer(MapBounds mapBounds, System.Windows.Size size)
+            {
+                bounds = mapBounds;
+                canvasSize = size;
+            }
+
+            public System.Windows.Point GeoToScreen(double x, double y)
+            {
+                double xRatio = (x - bounds.MinX) / bounds.Width;
+                double yRatio = 1.0 - (y - bounds.MinY) / bounds.Height; // Y轴翻转
+
+                return new System.Windows.Point(
+                    xRatio * canvasSize.Width,
+                    yRatio * canvasSize.Height
+                );
+            }
+
+            public (double x, double y) ScreenToGeo(System.Windows.Point screenPoint)
+            {
+                double xRatio = screenPoint.X / canvasSize.Width;
+                double yRatio = 1.0 - (screenPoint.Y / canvasSize.Height); // Y轴翻转
+
+                double x = bounds.MinX + xRatio * bounds.Width;
+                double y = bounds.MinY + yRatio * bounds.Height;
+
+                return (x, y);
+            }
+        }
+        public void ZoomIn()
+        {
+            zoomLevel *= 1.2;
+        }
+
+        public void ZoomOut()
+        {
+            zoomLevel /= 1.2;
+            if (zoomLevel < 0.1) zoomLevel = 0.1;
+        }
+
+        public void ResetView()
+        {
+            zoomLevel = 1.0;
+        }
+
+    }
+}

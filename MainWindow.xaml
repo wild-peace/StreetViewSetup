@@ -1,0 +1,72 @@
+﻿<Window x:Class="LocalStreetViewApp.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:h="clr-namespace:HelixToolkit.Wpf;assembly=HelixToolkit.Wpf"
+        Title="本地街景浏览器" Height="900" Width="1200"
+        Background="Black" WindowStartupLocation="CenterScreen">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="300"/>
+        </Grid.RowDefinitions>
+
+        <!-- 主3D视口 -->
+        <h:HelixViewport3D x:Name="helixViewport" Grid.Row="0"
+                           ShowCoordinateSystem="False"
+                           ShowFrameRate="False"
+                           ZoomExtentsWhenLoaded="False"
+                           Background="Black"/>
+
+        <!-- 地图面板 -->
+        <Border Grid.Row="1" BorderBrush="Gray" BorderThickness="1" Background="#FF1E1E1E">
+            <Grid>
+                <!-- 地图图像 -->
+                <Image x:Name="MapImage" Stretch="Uniform" 
+                       MouseDown="MapImage_MouseDown"
+                       MouseMove="MapImage_MouseMove"/>
+
+                <!-- 位置标记 -->
+                <Canvas>
+                    <Ellipse x:Name="PositionMarker" 
+                             Width="12" Height="12" 
+                             Fill="Red" Stroke="White" 
+                             StrokeThickness="2"
+                             Visibility="Collapsed"/>
+                    <Ellipse x:Name="PositionMarkerInner" 
+                             Width="4" Height="4" 
+                             Fill="White" 
+                             Visibility="Collapsed"/>
+                </Canvas>
+
+                <!-- 地图控制按钮 -->
+                <StackPanel VerticalAlignment="Top" HorizontalAlignment="Right" Margin="10">
+                    <Button Content="+" Click="ZoomIn_Click" Width="30" Height="30" Margin="2" 
+                            Background="#CCFFFFFF" FontWeight="Bold"/>
+                    <Button Content="-" Click="ZoomOut_Click" Width="30" Height="30" Margin="2"
+                            Background="#CCFFFFFF" FontWeight="Bold"/>
+                    <Button Content="复位" Click="ResetView_Click" Width="40" Height="25" Margin="2"
+                            Background="#CCFFFFFF" FontSize="10"/>
+                    <Button Content="加载SHP" Click="BtnLoadSHP_Click" Width="60" Height="25" Margin="2"
+                            Background="#CCFFFFFF" FontSize="10"/>
+                    <Button Content="加载路网" Click="BtnLoadLine_Click" Width="60" Height="25" Margin="2"
+            Background="#CCFFFFFF" FontSize="10"/>
+                    
+                </StackPanel>
+
+                <!-- 坐标信息 -->
+                <TextBlock x:Name="MapCoordText" VerticalAlignment="Bottom" HorizontalAlignment="Left" 
+                          Margin="10" Foreground="White" FontSize="11" Background="#66000000" Padding="5"/>
+            </Grid>
+        </Border>
+
+        <!-- 底部控制栏 -->
+        <DockPanel Grid.Row="1" VerticalAlignment="Bottom" Background="#AA000000" Height="40">
+            <Button Content="上一张" Width="80" Margin="10,0" Click="BtnPrev_Click"/>
+            <Button Content="下一张" Width="80" Margin="10,0" Click="BtnNext_Click"/>
+            <TextBlock x:Name="txtInfo"
+                       Foreground="White" FontSize="14"
+                       VerticalAlignment="Center" Margin="10,0"/>
+        </DockPanel>
+    </Grid>
+</Window>
