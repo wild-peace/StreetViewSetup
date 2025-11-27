@@ -4,7 +4,37 @@
         xmlns:h="clr-namespace:HelixToolkit.Wpf;assembly=HelixToolkit.Wpf"
         Title="本地街景浏览器" Height="900" Width="1200"
         Background="Black" WindowStartupLocation="CenterScreen">
+    <Window.Resources>
+        <!-- 定义罗盘的视觉样式，这个Grid不会直接显示在界面上，而是作为3D材质 -->
+        <Grid x:Key="CompassDesign" Width="200" Height="200">
+            <!-- 半透明黑色背景圆圈 -->
+            <Ellipse Fill="#80000000" Stroke="White" StrokeThickness="2"/>
 
+            <!-- 十字线 -->
+            <Path Data="M100,20 L100,180 M20,100 L180,100" Stroke="#40FFFFFF" StrokeThickness="1"/>
+
+            <!-- 箭头与文字 (假设上方对应Z轴正向/北方) -->
+            <!-- 北 (红色箭头) -->
+            <Polygon Points="100,25 90,45 110,45" Fill="Red"/>
+            <TextBlock Text="" Foreground="Red" FontSize="24" FontWeight="Bold" 
+                   HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,5,0,0"/>
+
+            <!-- 南 -->
+            <Polygon Points="100,175 90,155 110,155" Fill="White"/>
+            <TextBlock Text="" Foreground="White" FontSize="24" FontWeight="Bold" 
+                   HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,5"/>
+
+            <!-- 东 -->
+            <Polygon Points="175,100 155,90 155,110" Fill="White"/>
+            <TextBlock Text="" Foreground="White" FontSize="24" FontWeight="Bold" 
+                   HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,5,0"/>
+
+            <!-- 西 -->
+            <Polygon Points="25,100 45,90 45,110" Fill="White"/>
+            <TextBlock Text="" Foreground="White" FontSize="24" FontWeight="Bold" 
+                   HorizontalAlignment="Left" VerticalAlignment="Center" Margin="5,0,0,0"/>
+        </Grid>
+    </Window.Resources>
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="*"/>
@@ -20,7 +50,7 @@
 
         <!-- 地图面板 -->
         <Border Grid.Row="1" BorderBrush="Gray" BorderThickness="1" Background="#FF1E1E1E">
-            <Grid>
+            <Grid >
                 <!-- 地图图像 -->
                 <Image x:Name="MapImage" Stretch="Uniform" 
                              MouseDown="MapImage_MouseDown"

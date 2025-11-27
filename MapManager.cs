@@ -411,6 +411,52 @@ namespace LocalStreetViewApp
             return best;
         }
 
+        public static double CalculateBearing(double lat1, double lon1, double lat2, double lon2)
+        {
+            var dLon = (lon2 - lon1) * Math.PI / 180.0;
+            var y = Math.Sin(dLon) * Math.Cos(lat2 * Math.PI / 180.0);
+            var x = Math.Cos(lat1 * Math.PI / 180.0) * Math.Sin(lat2 * Math.PI / 180.0) -
+                    Math.Sin(lat1 * Math.PI / 180.0) * Math.Cos(lat2 * Math.PI / 180.0) * Math.Cos(dLon);
+            var brng = Math.Atan2(y, x);
+            return (brng * 180.0 / Math.PI + 360.0) % 360.0; // 转换为 0-360 度
+        }
+
+        // 在指定方向寻找最近的邻居节点
+        // current: 当前节点
+        // targetBearing: 目标方位 (0, 90, 180, 270)
+        // toleranceAngle: 角度容差 (例如 +/- 45度)
+        // maxDistance: 最大查找距离 (米)
+        public StreetNode FindNeighborInDirection(StreetNode current, double targetBearing, double toleranceAngle = 45.0, double maxDistance = 200.0)
+        {
+            StreetNode bestNode = null;
+            double minDistance = double.MaxValue;
+
+            foreach (var node in Nodes)
+            {
+                if (node.Id == current.Id) continue; // 跳过自己
+                if (string.IsNullOrEmpty(node.ImagePath)) continue; // 跳过没图的
+
+                // 1. 计算距离
+                double dist = Haversine(current.Lat, current.Lon, node.Lat, node.Lon);
+                if (dist > maxDistance) continue; // 太远的不考虑
+
+                // 2. 计算方位角
+                double bearing = CalculateBearing(current.Lat, current.Lon, node.Lat, node.Lon);
+
+                // 3. 计算角度差 (处理 0/360 的边界情况)
+                double diff = Math.Abs(bearing - targetBearing);
+                if (diff > 180) diff = 360 - diff;
+
+                // 4. 判断是否在方向范围内且距离最近
+                if (diff <= toleranceAngle && dist < minDistance)
+                {
+                    minDistance = dist;
+                    bestNode = node;
+                }
+            }
+
+            return bestNode;
+        }
         // -------------------------------
         //   经纬度距离（Haversine）
         // -------------------------------
@@ -587,23 +633,37 @@ namespace LocalStreetViewApp
             if (range / baseSize > 2) return baseSize;
             return baseSize / 2;
         }
-        public MapBounds GetCurrentViewBounds()
-        {
-            var fullBounds = GetDataBounds();
-            if (!isViewInitialized) ResetView();
+        public MapBounds GetCurrentViewBounds(double screenWidth = 0, double screenHeight = 0)
+{
+    var fullBounds = GetDataBounds();
+    if (!isViewInitialized) ResetView();
 
-            // 根据缩放级别计算当前的视野宽高
-            double currentGeoWidth = fullBounds.Width / zoomLevel;
-            double currentGeoHeight = fullBounds.Height / zoomLevel;
+    // 1. 计算当前视野的【地理宽度】 (由 ZoomLevel 控制)
+    double currentGeoWidth = fullBounds.Width / zoomLevel;
+    double currentGeoHeight;
 
-            // 基于当前中心点计算边界
-            return new MapBounds(
-                viewCenterX - currentGeoWidth / 2,
-                viewCenterY - currentGeoHeight / 2,
-                viewCenterX + currentGeoWidth / 2,
-                viewCenterY + currentGeoHeight / 2
-            );
-        }
+    // 2. 计算当前视野的【地理高度】
+    if (screenWidth > 0 && screenHeight > 0)
+    {
+        // ★ 核心修复：强制让地理范围的长宽比 = 屏幕的长宽比
+        // 这样地图填满屏幕时，才不会变形（不会把正方形房子压扁）
+        double screenRatio = screenWidth / screenHeight;
+        currentGeoHeight = currentGeoWidth / screenRatio;
+    }
+    else
+    {
+        // 如果没有传入屏幕大小（比如初始化时），使用默认比例
+        currentGeoHeight = fullBounds.Height / zoomLevel;
+    }
+
+    // 3. 基于中心点生成边界
+    return new MapBounds(
+        viewCenterX - currentGeoWidth / 2,
+        viewCenterY - currentGeoHeight / 2,
+        viewCenterX + currentGeoWidth / 2,
+        viewCenterY + currentGeoHeight / 2
+    );
+}
         public MapBounds GetDataBounds()
         {
             double minX = double.MaxValue, maxX = double.MinValue;

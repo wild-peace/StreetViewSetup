@@ -37,7 +37,7 @@ namespace LocalStreetViewApp
         // 地图相关变量
         private MapManager mapManager;
         private CoordinateTransformer coordinateTransformer;
-
+        private GeometryModel3D compassGeometry;
         public MainWindow()
         {
             InitializeComponent();
@@ -101,6 +101,55 @@ namespace LocalStreetViewApp
             catch (Exception ex)
             {
                 Console.WriteLine($"更新地图显示失败: {ex.Message}");
+            }
+        }
+        private void CreateCompass()
+        {
+            var meshBuilder = new MeshBuilder();
+
+            // 定义四个点 (顺时针或逆时针，确保面朝上)
+            // 这里创建一个 XZ 平面上的板子
+            double size = 8.0; // 罗盘大小
+            double yPos = -5.0; // 高度（负数表示在脚下）
+
+            // 添加一个四边形 (p0, p1, p2, p3)
+            meshBuilder.AddQuad(
+       new System.Numerics.Vector3((float)-size, (float)yPos, (float)size),  // 左下
+       new System.Numerics.Vector3((float)size, (float)yPos, (float)size),   // 右下
+       new System.Numerics.Vector3((float)size, (float)yPos, (float)-size),  // 右上
+       new System.Numerics.Vector3((float)-size, (float)yPos, (float)-size)  // 左上
+   );
+
+            // 2. 创建材质：使用 XAML 中的资源
+            var compassGrid = (Grid)this.FindResource("CompassDesign");
+            var visualBrush = new VisualBrush(compassGrid);
+
+            // 关键：解决 VisualBrush 在 3D 中可能的渲染问题
+            RenderOptions.SetCachingHint(visualBrush, CachingHint.Cache);
+
+            var material = new DiffuseMaterial(visualBrush);
+
+            compassGeometry = new GeometryModel3D(meshBuilder.ToMesh().ToWndMeshGeometry3D(), material);
+
+            // 解决背面透明问题（让罗盘两面都能看到，防止旋转时消失）
+            compassGeometry.BackMaterial = material;
+
+            // 4. 添加到视口
+            // 之前 sphereModelVisual 只是用来放球体，现在我们把它当容器，或者直接加进去
+            // 这里我们把罗盘也加到 sphereModelVisual 中，方便管理
+            if (sphereModelVisual.Content is Model3DGroup group)
+            {
+                group.Children.Add(compassGeometry);
+            }
+            else
+            {
+                // 如果 Content 之前是单个 GeometryModel3D，现在升级为 Group
+                var newGroup = new Model3DGroup();
+                if (sphereModelVisual.Content != null)
+                    newGroup.Children.Add(sphereModelVisual.Content); // 把原来的球加进去
+
+                newGroup.Children.Add(compassGeometry); // 把罗盘加进去
+                sphereModelVisual.Content = newGroup;
             }
         }
 
@@ -328,6 +377,32 @@ namespace LocalStreetViewApp
                 // 更新地图位置标记
 
                 Console.WriteLine($"成功加载全景图片: {fileName}");
+                if (sphereGeometry == null)
+                {
+                    sphereGeometry = new GeometryModel3D
+                    {
+                        Geometry = mesh,
+                        Material = material,
+                        BackMaterial = material
+                    };
+                }
+                else
+                {
+                    // 如果对象已存在，直接替换材质和几何体，避免重建 Group
+                    sphereGeometry.Geometry = mesh;
+                    sphereGeometry.Material = material;
+                    sphereGeometry.BackMaterial = material;
+                }
+
+                var group = new Model3DGroup();
+                group.Children.Add(sphereGeometry);
+
+                // 设置到 Visual
+                sphereModelVisual.Content = group;
+
+                CreateCompass();
+
+                UpdateSphereRotation();
             }
             catch (Exception ex)
             {
@@ -538,16 +613,26 @@ namespace LocalStreetViewApp
 
         private void UpdateSphereRotation()
         {
-            if (sphereGeometry != null)
-            {
-                var transformGroup = new Transform3DGroup();
-                transformGroup.Children.Add(new RotateTransform3D(
-                    new AxisAngleRotation3D(new Vector3D(1, 0, 0), rotationX)));
-                transformGroup.Children.Add(new RotateTransform3D(
-                    new AxisAngleRotation3D(new Vector3D(0, 1, 0), rotationY)));
+            // 创建旋转变换
+            var transformGroup = new Transform3DGroup();
 
+            // 1. X轴旋转 (上下看)
+            transformGroup.Children.Add(new RotateTransform3D(
+                new AxisAngleRotation3D(new Vector3D(1, 0, 0), rotationX)));
+
+            // 2. Y轴旋转 (左右看)
+            transformGroup.Children.Add(new RotateTransform3D(
+                new AxisAngleRotation3D(new Vector3D(0, 1, 0), rotationY)));
+
+            // ★★★ 关键：将旋转应用到所有物体 ★★★
+
+            // 应用给球体
+            if (sphereGeometry != null)
                 sphereGeometry.Transform = transformGroup;
-            }
+
+            // 应用给罗盘
+            if (compassGeometry != null)
+                compassGeometry.Transform = transformGroup;
         }
 
         private void AttachMouseHandlers()
@@ -607,14 +692,4 @@ namespace LocalStreetViewApp
             if (e.Key == Key.Right) BtnNext_Click(null, null);
         }
     }
-
-    // 街景节点结构
-    //public class StreetNode
-    //{
-    //    public int Id;
-    //    public double Lon;
-    //    public double Lat;
-    //    public string ImagePath;        // 绑定的街景图片路径
-    //    public double DistanceToImage;  // 图片到节点距离
-    //}
 }
