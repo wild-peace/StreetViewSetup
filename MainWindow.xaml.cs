@@ -77,26 +77,30 @@ namespace LocalStreetViewApp
             {
                 if (mapManager == null) return;
 
-                // 获取 MapImage 控件的实际像素大小，如果还未渲染则给个默认值
                 int w = (int)MapImage.ActualWidth;
                 int h = (int)MapImage.ActualHeight;
                 if (w <= 0 || h <= 0) { w = 800; h = 300; }
 
-                // 1. 传入控件大小进行渲染
-                using (var mapBitmap = mapManager.RenderMap(streetNodes, w, h))
+                // ★ 获取当前高亮的点 ID
+                int currentId = -1;
+                if (streetNodes.Count > 0 && currentIndex >= 0 && currentIndex < streetNodes.Count)
+                {
+                    currentId = streetNodes[currentIndex].Id;
+                }
+
+                // ★ 传入 currentId 进行渲染
+                using (var mapBitmap = mapManager.RenderMap(streetNodes, w, h, currentId))
                 {
                     MapImage.Source = BitmapToImageSource(mapBitmap);
                 }
 
+                // 更新坐标转换器
                 var currentBounds = mapManager.GetCurrentViewBounds();
                 coordinateTransformer = new CoordinateTransformer(currentBounds, new System.Windows.Size(w, h));
-
-                // 3. 如果有选中的点，刷新红点位置
-                UpdatePositionMarker();
             }
             catch (Exception ex)
             {
-
+                Console.WriteLine($"更新地图显示失败: {ex.Message}");
             }
         }
 
@@ -139,8 +143,7 @@ namespace LocalStreetViewApp
                     coordinateTransformer = new CoordinateTransformer(mapBounds,
                         new System.Windows.Size(MapImage.ActualWidth, MapImage.ActualHeight));
 
-                    // 4. 如果当前有选中的全景点，更新它的红点标记位置
-                    UpdatePositionMarker();
+
 
                     MessageBox.Show($"路网加载成功，共 {mapManager.Lines.Count} 条道路");
                 }
@@ -321,9 +324,8 @@ namespace LocalStreetViewApp
 
                 string fileName = Path.GetFileName(node.ImagePath);
                 txtInfo.Text = $"{currentIndex + 1}/{streetNodes.Count} - {fileName} ({bmp.PixelWidth}×{bmp.PixelHeight}) - 距离: {node.DistanceToImage:F2}米";
-
+                UpdateMapDisplay();
                 // 更新地图位置标记
-                UpdatePositionMarker();
 
                 Console.WriteLine($"成功加载全景图片: {fileName}");
             }
@@ -337,21 +339,52 @@ namespace LocalStreetViewApp
 
         private void MapImage_MouseDown(object sender, MouseButtonEventArgs e)
         {
+            // 1. 只有左键点击才处理
+            if (e.ChangedButton != MouseButton.Left) return;
+
             if (streetNodes.Count == 0 || coordinateTransformer == null) return;
 
+            // 获取屏幕点击坐标
             var clickPoint = e.GetPosition(MapImage);
 
-            // 获取点击位置的地理坐标
-            var (x, y) = coordinateTransformer.ScreenToGeo(clickPoint);
+            // 获取点击位置对应的地理坐标
+            var (geoX, geoY) = coordinateTransformer.ScreenToGeo(clickPoint);
 
-            // 查找最近的有图片的节点
-            var nearestNode = FindNearestNodeWithImage(x, y);
+            // 查找地理位置最近的候选节点
+            var candidateNode = FindNearestNodeWithImage(geoX, geoY);
 
-            if (nearestNode != null)
+            if (candidateNode != null)
             {
-                // 切换到该全景
-                currentIndex = streetNodes.IndexOf(nearestNode);
-                LoadPanorama(currentIndex);
+                // ★★★ 核心修改：增加距离验证 ★★★
+
+                // 将候选节点的地理坐标转回屏幕坐标
+                var nodeScreenPos = coordinateTransformer.GeoToScreen(candidateNode.Lon, candidateNode.Lat);
+
+                // 计算鼠标点击点与该节点在屏幕上的像素距离
+                double dx = clickPoint.X - nodeScreenPos.X;
+                double dy = clickPoint.Y - nodeScreenPos.Y;
+                double pixelDistance = Math.Sqrt(dx * dx + dy * dy);
+
+                // 设定阈值：例如 15 像素（大约是一个手指点击或鼠标光标的容错范围）
+                double hitThreshold = 15.0;
+
+                if (pixelDistance <= hitThreshold)
+                {
+                    // 距离足够近，确认为选中
+                    int newIndex = streetNodes.IndexOf(candidateNode);
+
+                    // 只有当点击的不是当前点时才加载
+                    if (newIndex != currentIndex)
+                    {
+                        currentIndex = newIndex;
+                        LoadPanorama(currentIndex);
+                    }
+                }
+                else
+                {
+                    Console.WriteLine($"点击未命中: 距离最近点 {pixelDistance:F1} 像素 (阈值 {hitThreshold})");
+                    // 距离太远，视为点击了空白处，不做任何操作
+                }
             }
         }
 
@@ -366,6 +399,21 @@ namespace LocalStreetViewApp
         private double CalculateDistance(double x1, double y1, double x2, double y2)
         {
             return Math.Sqrt(Math.Pow(x2 - x1, 2) + Math.Pow(y2 - y1, 2));
+        }
+
+        private void MapImage_MouseWheel(object sender, MouseWheelEventArgs e)
+        {
+            if (mapManager == null) return;
+
+            // 获取鼠标位置
+            var mousePos = e.GetPosition(MapImage);
+            mapManager.ZoomAtPoint(e.Delta, mousePos.X, mousePos.Y, MapImage.ActualWidth, MapImage.ActualHeight);
+
+            // 重新渲染地图
+            UpdateMapDisplay();
+
+            // 阻止事件冒泡（可选，防止外层容器也跟着滚动）
+            e.Handled = true;
         }
 
         private void MapImage_MouseMove(object sender, MouseEventArgs e)
@@ -412,43 +460,24 @@ namespace LocalStreetViewApp
                 MapImage.Cursor = Cursors.Arrow; // 恢复鼠标样式
             }
         }
-        private void UpdatePositionMarker()
-        {
-            if (currentIndex < streetNodes.Count && coordinateTransformer != null)
-            {
-                var node = streetNodes[currentIndex];
-                var screenPos = coordinateTransformer.GeoToScreen(node.Lon, node.Lat);
-
-                Canvas.SetLeft(PositionMarker, screenPos.X - 6);
-                Canvas.SetTop(PositionMarker, screenPos.Y - 6);
-                Canvas.SetLeft(PositionMarkerInner, screenPos.X - 2);
-                Canvas.SetTop(PositionMarkerInner, screenPos.Y - 2);
-
-                PositionMarker.Visibility = Visibility.Visible;
-                PositionMarkerInner.Visibility = Visibility.Visible;
-            }
-        }
 
         // 地图缩放控制
         private void ZoomIn_Click(object sender, RoutedEventArgs e)
         {
             mapManager.ZoomIn();
             UpdateMapDisplay();
-            UpdatePositionMarker();
         }
 
         private void ZoomOut_Click(object sender, RoutedEventArgs e)
         {
             mapManager.ZoomOut();
             UpdateMapDisplay();
-            UpdatePositionMarker();
         }
 
         private void ResetView_Click(object sender, RoutedEventArgs e)
         {
             mapManager.ResetView();
             UpdateMapDisplay();
-            UpdatePositionMarker();
         }
 
         // 全景浏览控制

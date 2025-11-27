@@ -292,9 +292,6 @@ namespace LocalStreetViewApp
                     try
                     {
                         string fileName = Path.GetFileNameWithoutExtension(file);
-
-                        // 假设文件名格式为: 114.38663_30.51497866
-                        // 使用 '_' 分割
                         var parts = fileName.Split('_');
 
                         if (parts.Length >= 2)
@@ -309,7 +306,7 @@ namespace LocalStreetViewApp
                     }
                     catch
                     {
-                        // 忽略解析失败的文件名
+                        
                     }
                 }
 
@@ -434,40 +431,6 @@ namespace LocalStreetViewApp
 
             return R * 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
         }
-
-        // -------------------------------
-        //   地图渲染
-        // -------------------------------
-        public Bitmap RenderMap(List<StreetNode> nodes)
-        {
-            try
-            {
-                var bounds = GetMapBounds();
-                int width = 800;
-                int height = 300;
-
-                var bitmap = new Bitmap(width, height);
-                using (var graphics = Graphics.FromImage(bitmap))
-                {
-                    // 开启抗锯齿，线条更平滑
-                    graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                    graphics.Clear(Color.LightGray);
-
-                    DrawGrid(graphics, bounds, width, height);
-
-                    graphics.Clear(Color.FromArgb(255, 248, 220));
-                    DrawLines(graphics, Lines, bounds, width, height);
-                    
-                    DrawNodes(graphics, nodes, bounds, width, height);
-                }
-                return bitmap;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"渲染失败: {ex.Message}");
-                return new Bitmap(800, 300);
-            }
-        }
         private void DrawLines(Graphics graphics, List<StreetLine> lines, MapBounds bounds, int width, int height)
         {
             if (lines == null || lines.Count == 0) return;
@@ -538,57 +501,81 @@ namespace LocalStreetViewApp
             }
         }
 
-        private void DrawNodes(Graphics graphics, List<StreetNode> nodes, MapBounds bounds, int width, int height)
+        private void DrawNodes(Graphics graphics, List<StreetNode> nodes, MapBounds bounds, int width, int height, int activeNodeId)
         {
-            if (nodes == null || nodes.Count == 0)
-            {
-                // 绘制提示信息
-                //graphics.DrawString("没有数据点", new Font("Arial", 16), Brushes.Red, width / 2 - 50, height / 2 - 10);
-                return;
-            }
+            if (nodes == null || nodes.Count == 0) return;
 
+            // 定义画笔
             using (var noImageBrush = new SolidBrush(Color.Gray))
             using (var hasImageBrush = new SolidBrush(Color.Red))
+            // ★ 定义高亮画笔：例如亮青色，或者绿色
+            using (var activeBrush = new SolidBrush(Color.Cyan))
             using (var outlinePen = new Pen(Color.Black, 1))
+            using (var activeOutlinePen = new Pen(Color.White, 2)) // 高亮点的外框
             {
-                int nodesWithImages = 0;
-
                 foreach (var node in nodes)
                 {
-                    int screenX = (int)((node.Lon - bounds.MinX) / bounds.Width * width);
-                    int screenY = height - (int)((node.Lat - bounds.MinY) / bounds.Height * height);
+                    // 坐标转换
+                    float screenX = (float)((node.Lon - bounds.MinX) / bounds.Width * width);
+                    float screenY = (float)(height - (node.Lat - bounds.MinY) / bounds.Height * height);
 
-                    // 根据是否有图片选择颜色
-                    var brush = string.IsNullOrEmpty(node.ImagePath) ? noImageBrush : hasImageBrush;
+                    // 检查是否是当前点
+                    bool isActive = (node.Id == activeNodeId);
 
-                    // 绘制点位
-                    graphics.FillEllipse(brush, screenX - 4, screenY - 4, 4, 4);
-                    graphics.DrawEllipse(outlinePen, screenX - 4, screenY - 4, 4, 4);
-
-                    // 绘制编号（只绘制有图片的节点）
-                    if (!string.IsNullOrEmpty(node.ImagePath))
+                    if (isActive)
                     {
-                        graphics.DrawString(
-                            (node.Id + 1).ToString(),
-                            new Font("Arial", 8),
-                            Brushes.White,
-                            screenX + 6,
-                            screenY - 6
-                        );
-                        nodesWithImages++;
+                        // ★★★ 绘制高亮当前点 ★★★
+                        // 画得大一点 (半径8，直径16)
+                        float size = 16;
+                        graphics.FillEllipse(activeBrush, screenX - size/2, screenY - size/2, size, size);
+                        // 画个白色外框，显眼
+                        graphics.DrawEllipse(activeOutlinePen, screenX - size/2, screenY - size/2, size, size);
+
+                        // 再画一个中心黑点，像靶心一样
+                        graphics.FillEllipse(Brushes.Black, screenX - 2, screenY - 2, 4, 4);
+                    }
+                    else
+                    {
+                        // --- 绘制普通点 ---
+                        var brush = string.IsNullOrEmpty(node.ImagePath) ? noImageBrush : hasImageBrush;
+                        float size = 6; // 普通点大小
+
+                        graphics.FillEllipse(brush, screenX - size/2, screenY - size/2, size, size);
+                        graphics.DrawEllipse(outlinePen, screenX - size/2, screenY - size/2, size, size);
                     }
                 }
-
-                // 绘制统计信息
-                graphics.DrawString(
-                    $"总节点: {nodes.Count}, 有图片: {nodesWithImages}",
-                    new Font("Arial", 10),
-                    Brushes.Black,
-                    10, 10
-                );
             }
         }
+   
+        public void ZoomAtPoint(int delta, double screenX, double screenY, double canvasWidth, double canvasHeight)
+        {
+            if (!isViewInitialized) ResetView();
 
+          
+            var currentBounds = GetCurrentViewBounds();
+
+            double ratioX = currentBounds.Width / canvasWidth;
+            double ratioY = currentBounds.Height / canvasHeight;
+
+            double mouseGeoX = currentBounds.MinX + screenX * ratioX;
+            double mouseGeoY = currentBounds.MaxY - screenY * ratioY;
+
+            double scaleFactor = (delta > 0) ? 1.2 : (1.0 / 1.2);
+            double newZoom = zoomLevel * scaleFactor;
+            if (newZoom < 0.1) newZoom = 0.1;
+            if (newZoom > 10000.0) newZoom = 10000.0;
+
+            // 如果缩放级别没变（比如到了极限），直接退出
+            if (Math.Abs(newZoom - zoomLevel) < 0.0001) return;
+
+            // 实际上生效的缩放倍率（因为上面可能有范围限制）
+            double effectiveFactor = newZoom / zoomLevel;
+
+            // 更新缩放级别
+            zoomLevel = newZoom;
+            viewCenterX = mouseGeoX - (mouseGeoX - viewCenterX) / effectiveFactor;
+            viewCenterY = mouseGeoY - (mouseGeoY - viewCenterY) / effectiveFactor;
+        }
         private double CalculateGridSize(MapBounds bounds)
         {
             double range = Math.Max(bounds.Width, bounds.Height);
@@ -670,16 +657,14 @@ namespace LocalStreetViewApp
             return new MapBounds(minX - marginX, minY - marginY, maxX + marginX, maxY + marginY);
         }
 
-        // 2. 修改 RenderMap 方法，接收外部传入的宽高，并使用当前视图范围
-        // 修改前: public Bitmap RenderMap(List<StreetNode> nodes)
-        public Bitmap RenderMap(List<StreetNode> nodes, int canvasWidth, int canvasHeight)
+
+        public Bitmap RenderMap(List<StreetNode> nodes, int canvasWidth, int canvasHeight, int activeNodeId = -1)
         {
             try
             {
-                // ★★★ 关键修改：获取缩放后的范围，而不是全图范围 ★★★
                 var bounds = GetCurrentViewBounds();
 
-                // 防止除以0
+                // 防止尺寸错误
                 if (canvasWidth <= 0) canvasWidth = 1;
                 if (canvasHeight <= 0) canvasHeight = 1;
 
@@ -687,22 +672,22 @@ namespace LocalStreetViewApp
                 using (var graphics = Graphics.FromImage(bitmap))
                 {
                     graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                    graphics.Clear(Color.LightGray); // 背景色
+                    graphics.Clear(Color.LightGray);
 
-                    // 传入当前的 bounds 和 画布尺寸
                     DrawGrid(graphics, bounds, canvasWidth, canvasHeight);
 
-                    graphics.Clear(Color.FromArgb(255, 248, 220)); // 街道背景
+                    graphics.Clear(Color.FromArgb(255, 248, 220));
                     DrawLines(graphics, Lines, bounds, canvasWidth, canvasHeight);
 
-                    DrawNodes(graphics, nodes, bounds, canvasWidth, canvasHeight);
+                    // ★ 传入 activeNodeId
+                    DrawNodes(graphics, nodes, bounds, canvasWidth, canvasHeight, activeNodeId);
                 }
                 return bitmap;
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"渲染失败: {ex.Message}");
-                return new Bitmap(Math.Max(1, canvasWidth), Math.Max(1, canvasHeight));
+                return new Bitmap(1, 1);
             }
         }
         public MapBounds GetMapBounds()

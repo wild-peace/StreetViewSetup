@@ -23,23 +23,11 @@
             <Grid>
                 <!-- 地图图像 -->
                 <Image x:Name="MapImage" Stretch="Uniform" 
-       MouseDown="MapImage_MouseDown"
-       MouseMove="MapImage_MouseMove"
-       MouseRightButtonDown="MapImage_MouseRightButtonDown"
-       MouseRightButtonUp="MapImage_MouseRightButtonUp"/>
-
-                <!-- 位置标记 -->
-                <Canvas>
-                    <Ellipse x:Name="PositionMarker" 
-                             Width="12" Height="12" 
-                             Fill="Red" Stroke="White" 
-                             StrokeThickness="2"
-                             Visibility="Collapsed"/>
-                    <Ellipse x:Name="PositionMarkerInner" 
-                             Width="4" Height="4" 
-                             Fill="White" 
-                             Visibility="Collapsed"/>
-                </Canvas>
+                             MouseDown="MapImage_MouseDown"
+                        MouseMove="MapImage_MouseMove"
+                         MouseRightButtonDown="MapImage_MouseRightButtonDown"
+                        MouseRightButtonUp="MapImage_MouseRightButtonUp"
+                       MouseWheel="MapImage_MouseWheel"/>
 
                 <!-- 地图控制按钮 -->
                 <StackPanel VerticalAlignment="Top" HorizontalAlignment="Right" Margin="10">
