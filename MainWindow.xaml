@@ -7,32 +7,32 @@
     <Window.Resources>
         <!-- 定义罗盘的视觉样式，这个Grid不会直接显示在界面上，而是作为3D材质 -->
         <Grid x:Key="CompassDesign" Width="200" Height="200">
-            <!-- 半透明黑色背景圆圈 -->
-            <Ellipse Fill="#80000000" Stroke="White" StrokeThickness="2"/>
+            <!-- 1. 背景：全透明，不需要白色底板，防止挡住路面 -->
+            <Grid.Background>
+                <SolidColorBrush Color="Transparent"/>
+            </Grid.Background>
 
-            <!-- 十字线 -->
-            <Path Data="M100,20 L100,180 M20,100 L180,100" Stroke="#40FFFFFF" StrokeThickness="1"/>
+            <!-- 2. 半透明深色圆盘 (模拟地面遮罩) -->
+            <Ellipse Fill="#99000000" Stroke="White" StrokeThickness="3" Margin="10"/>
 
-            <!-- 箭头与文字 (假设上方对应Z轴正向/北方) -->
-            <!-- 北 (红色箭头) -->
-            <Polygon Points="100,25 90,45 110,45" Fill="Red"/>
-            <TextBlock Text="" Foreground="Red" FontSize="24" FontWeight="Bold" 
-                   HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,5,0,0"/>
+            <!-- 3. 十字准星 (可选，增加科技感) -->
+            <Path Data="M100,30 L100,170 M30,100 L170,100" Stroke="#60FFFFFF" StrokeThickness="2"/>
 
-            <!-- 南 -->
-            <Polygon Points="100,175 90,155 110,155" Fill="White"/>
-            <TextBlock Text="" Foreground="White" FontSize="24" FontWeight="Bold" 
-                   HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,5"/>
+            <!-- 4. 方向箭头 -->
+            <!-- 北 (红色箭头 - 指向 XAML 的上方) -->
+            <Polygon Points="100,25 85,55 115,55" Fill="#FF4444" Stroke="White" StrokeThickness="1"/>
 
-            <!-- 东 -->
-            <Polygon Points="175,100 155,90 155,110" Fill="White"/>
-            <TextBlock Text="" Foreground="White" FontSize="24" FontWeight="Bold" 
-                   HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,5,0"/>
+            <!-- 南 (白色箭头) -->
+            <Polygon Points="100,175 85,145 115,145" Fill="#DDDDDD" Stroke="Gray" StrokeThickness="1"/>
 
-            <!-- 西 -->
-            <Polygon Points="25,100 45,90 45,110" Fill="White"/>
-            <TextBlock Text="" Foreground="White" FontSize="24" FontWeight="Bold" 
-                   HorizontalAlignment="Left" VerticalAlignment="Center" Margin="5,0,0,0"/>
+            <!-- 东 (白色小三角) -->
+            <Polygon Points="175,100 155,90 155,110" Fill="#DDDDDD" Opacity="0.8"/>
+
+            <!-- 西 (白色小三角) -->
+            <Polygon Points="25,100 45,90 45,110" Fill="#DDDDDD" Opacity="0.8"/>
+
+            <!-- 中心点 -->
+            <Ellipse Width="8" Height="8" Fill="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
         </Grid>
     </Window.Resources>
     <Grid>
@@ -52,7 +52,7 @@
         <Border Grid.Row="1" BorderBrush="Gray" BorderThickness="1" Background="#FF1E1E1E">
             <Grid >
                 <!-- 地图图像 -->
-                <Image x:Name="MapImage" Stretch="Uniform" 
+                <Image x:Name="MapImage" Stretch="Fill" 
                              MouseDown="MapImage_MouseDown"
                         MouseMove="MapImage_MouseMove"
                          MouseRightButtonDown="MapImage_MouseRightButtonDown"
@@ -66,6 +66,8 @@
                     <Button Content="-" Click="ZoomOut_Click" Width="30" Height="30" Margin="2"
                             Background="#CCFFFFFF" FontWeight="Bold"/>
                     <Button Content="复位" Click="ResetView_Click" Width="40" Height="25" Margin="2"
+                            Background="#CCFFFFFF" FontSize="10"/>
+                    <Button Content="加载图片" Click="BtnLoadImages_Click" Width="60" Height="25" Margin="2"
                             Background="#CCFFFFFF" FontSize="10"/>
                     <Button Content="加载SHP" Click="BtnLoadSHP_Click" Width="60" Height="25" Margin="2"
                             Background="#CCFFFFFF" FontSize="10"/>
