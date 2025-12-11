@@ -37,6 +37,8 @@ namespace LocalStreetViewApp
         private ModelVisual3D sphereModelVisual; // 球体容器
         private GeometryModel3D sphereGeometry;  // 全景球体模型
         private GeometryModel3D compassGeometry; // 脚下指南针模型
+        private Point dragStartPoint; // 记录按下时的位置
+        private bool isClickOperation = false; // 标记是否是一次点击操作
 
         // --- 2D 地图状态 ---
         private bool isMapPanning = false; // 地图是否正在平移
@@ -451,6 +453,12 @@ namespace LocalStreetViewApp
             {
                 isDragging = true;
                 lastMousePos = e.GetPosition(this);
+
+                // --- 新增: 记录初始点击位置用于判定是否为点击 ---
+                dragStartPoint = e.GetPosition(helixViewport);
+                isClickOperation = true;
+                // ---------------------------------------------
+
                 helixViewport.CaptureMouse();
                 Mouse.OverrideCursor = Cursors.SizeAll;
             }
@@ -474,15 +482,21 @@ namespace LocalStreetViewApp
             double dy = pos.Y - lastMousePos.Y;
             lastMousePos = pos;
 
-            // 灵敏度设置 (根据手感微调)
-            double rotationSpeed = 0.15;
+            // --- 新增: 判定是否取消点击状态 ---
+            // 如果累计移动超过 5 像素，则认为是查看视角，而不是点击跳转
+            var currentViewportPos = e.GetPosition(helixViewport);
+            if (Math.Abs(currentViewportPos.X - dragStartPoint.X) > 5 ||
+                Math.Abs(currentViewportPos.Y - dragStartPoint.Y) > 5)
+            {
+                isClickOperation = false;
+            }
+            // --------------------------------
 
-           
+            // 原有的旋转逻辑...
+            double rotationSpeed = 0.15;
             rotationY = (rotationY - dx * rotationSpeed) % 360;
             rotationX = rotationX + dy * rotationSpeed;
-
             rotationX = Math.Max(-89, Math.Min(89, rotationX));
-
             UpdateCameraDirection();
         }
 
@@ -490,12 +504,63 @@ namespace LocalStreetViewApp
         {
             if (e.ChangedButton == MouseButton.Left)
             {
+                // --- 新增: 处理点击跳转逻辑 ---
+                if (isClickOperation && streetNodes.Count > 0)
+                {
+                    Handle3DViewClick(e.GetPosition(helixViewport));
+                }
+                // -----------------------------
+
                 isDragging = false;
                 helixViewport.ReleaseMouseCapture();
                 Mouse.OverrideCursor = null;
             }
         }
 
+        /// <summary>
+        /// 处理 3D 视图的点击事件
+        /// </summary>
+        private void Handle3DViewClick(Point mousePos)
+        {
+            // 1. 直接获取最近的点击点 (返回的是 Point3D? 类型)
+            // FindNearestPoint 是 HelixToolkit.Wpf 提供的扩展方法
+            var hitPointNullable = helixViewport.Viewport.FindNearestPoint(mousePos);
+
+            if (hitPointNullable.HasValue)
+            {
+                var hitPoint = hitPointNullable.Value;
+
+                // 2. 将 3D 向量转换为方位角 (0-360度)
+                // 根据之前的相机逻辑：Z轴负方向为北(0度)，X轴正方向为东(90度)
+                double angle = Math.Atan2(hitPoint.X, -hitPoint.Z) * 180.0 / Math.PI;
+
+                // 规范化到 0-360
+                if (angle < 0) angle += 360;
+
+                // 3. 在该角度寻找最近的下一张图
+                if (mapManager != null && streetNodes.Count > currentIndex)
+                {
+                    // 容差设为 30 度，最大距离 100 米
+                    var nextNode = mapManager.FindNextNodeInDirection(
+                        streetNodes[currentIndex].Id,
+                        angle,
+                        maxDistance: 100,
+                        angleTolerance: 30
+                    );
+
+                    if (nextNode != null)
+                    {
+                        int nextIndex = streetNodes.IndexOf(nextNode);
+                        if (nextIndex >= 0)
+                        {
+                            LoadPanorama(nextIndex);
+                            // 调试输出
+                            // Console.WriteLine($"点击方向: {angle:F0}°, 跳转到: {nextNode.Id}");
+                        }
+                    }
+                }
+            }
+        }
         private void HelixViewport_MouseWheel(object sender, MouseWheelEventArgs e)
         {
             // 通过调整 FOV 来模拟缩放

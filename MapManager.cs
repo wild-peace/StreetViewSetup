@@ -451,6 +451,54 @@ namespace LocalStreetViewApp
         #region 4. 渲染逻辑 (Rendering)
 
         /// <summary>
+        /// 根据当前节点和指定的方位角，寻找该方向上的下一个节点
+        /// </summary>
+        /// <param name="currentNodeId">当前节点ID</param>
+        /// <param name="targetBearing">点击的目标方位角 (0-360度，0为北)</param>
+        /// <param name="maxDistance">最大查找距离（米），防止跳到太远的地方</param>
+        /// <param name="angleTolerance">角度容差（度），点击方向左右多少度范围内算有效</param>
+        /// <returns>找到的节点，如果没有则返回 null</returns>
+        public StreetNode FindNextNodeInDirection(int currentNodeId, double targetBearing, double maxDistance = 100, double angleTolerance = 45)
+        {
+            var currentNode = Nodes.FirstOrDefault(n => n.Id == currentNodeId);
+            if (currentNode == null) return null;
+
+            StreetNode bestNode = null;
+            double minDistance = double.MaxValue;
+
+            foreach (var node in Nodes)
+            {
+                // 1. 跳过自身和没有图片的节点
+                if (node.Id == currentNode.Id || string.IsNullOrEmpty(node.ImagePath)) continue;
+
+                // 2. 计算距离
+                double dist = Haversine(currentNode.Lat, currentNode.Lon, node.Lat, node.Lon);
+                if (dist > maxDistance) continue;
+
+                // 3. 计算从当前点到该候选点的真实方位角
+                double bearing = CalculateBearing(currentNode.Lat, currentNode.Lon, node.Lat, node.Lon);
+
+                // 4. 计算点击角度与真实角度的偏差 (处理 0/360 度交界处的问题)
+                double diff = Math.Abs(bearing - targetBearing);
+                if (diff > 180) diff = 360 - diff;
+
+                // 5. 筛选：必须在角度容差范围内，且取距离最近的一个
+                if (diff < angleTolerance)
+                {
+                    // 优化：优先选择距离适中的点，太近（<5米）可能是同一个位置的重复拍摄
+                    // 这里简单逻辑：找最近的
+                    if (dist < minDistance)
+                    {
+                        minDistance = dist;
+                        bestNode = node;
+                    }
+                }
+            }
+
+            return bestNode;
+        }
+
+        /// <summary>
         /// 生成当前地图视图的 Bitmap
         /// </summary>
         /// <param name="activeNodeId">当前高亮的节点ID</param>
